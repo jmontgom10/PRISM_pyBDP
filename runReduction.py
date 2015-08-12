@@ -33,6 +33,8 @@ subDirs = ['20150117/PRISM_Images/', \
 # This line prepends the rawPath variable to each element in the subDirs list
 rawDirs = [rawPath + subDir for subDir in subDirs]
 
+calibrationDir = '/home/jordan/ThesisData/PRISM_Data/Calibration/'
+
 #Loop through each night and build a list of all the files in observing run
 fileList = []
 for night in subDirs:
@@ -142,13 +144,20 @@ lights   = fileIndex['Lights']
 # Find the number of unique binnings used in biases
 uniqBins = np.unique(binType[biasBool])
 
-# Test if there is a MasterBias image for each binnng level.
 masterBiases = {}
-fileTests    = [os.path.isfile('MasterBias{0:g}.fits'.format(thisBin))
-                for thisBin in uniqBins]
-if (np.sum(fileTests) != len(fileTests)):
-    binPolyDegrees = []
-    for thisBin in uniqBins:
+binPolyDegrees = []
+for thisBin in uniqBins:
+    # Construct the filename for this bias.
+    filename = calibrationDir + 'MasterBias{0:g}.fits'.format(thisBin)
+
+    # Test if there is a MasterBias image for this binnng level.
+    if os.path.isfile(filename):
+        # Read in the file if it exists
+        print('\nLoading file into masterBias list')
+        print(filename)
+        masterBiases.update({thisBin:
+                             Bias(filename)})
+    else:
         print('\nProcessing biases with ({0:g}x{0:g}) binning'.format(thisBin))
         
         # Construct the key name for this bias image
@@ -191,7 +200,7 @@ if (np.sum(fileTests) != len(fileTests)):
         masterBiases.update({thisBin: masterBias})
         
         # Write masterBias object to disk
-        fits.writeto('MasterBias{0:g}.fits'.format(thisBin),
+        fits.writeto(filename,
                      (masterBiases[thisBin].arr).astype(np.float32),
                      biasImgList[0].header,
                      clobber = True)
@@ -202,12 +211,7 @@ if (np.sum(fileTests) != len(fileTests)):
         # Do a quick cleanup to make sure that memory survives
         del biasImgList
         del masterBias
-else:
-    for thisBin in uniqBins:
-        # Construct the key name for this bias image
-        masterBiases.update({thisBin:
-                            Bias('MasterBias{0:g}.fits'.format(thisBin))})
-    
+
 # Check if the polynomial degrees for overscan correction have been saved
 if not os.path.isfile('overscanPolynomials.dat'):
     overscanPolyDegrees = Table([uniqBins, binPolyDegrees],
@@ -226,12 +230,17 @@ else:
 uniqBins = np.unique(binType[darkBool])
 
 masterDarks = {}
-fileTests   = [os.path.isfile('MasterDark{0:g}.fits'.format(thisBin))
-                for thisBin in uniqBins]
 
-#Test if darks have been computed for each binning level
-if (np.sum(fileTests) != len(fileTests)):
-    for thisBin in uniqBins:
+for thisBin in uniqBins:
+    # Construct filename for this dark
+    filename = calibrationDir + 'MasterDark{0:g}.fits'.format(thisBin)
+    # Test if darks have been computed for this binning level.
+    if os.path.isfile(filename):
+        print('\nLoading file into masterDark list')
+        print(filename)
+        masterDarks.update({thisBin:
+                            Dark(filename)})
+    else:
         print('\nProcessing darks with ({0:g}x{0:g}) binning'.format(thisBin))
         
         # Select the bias images with the correct binning level
@@ -251,7 +260,7 @@ if (np.sum(fileTests) != len(fileTests)):
                                          overscanPolyDegree)
             thisDark.arr = thisDark.arr - masterBiases[thisBin].arr
             darkImgList.append(thisDark)
-
+    
         # Generate a Dark(Image) object to store the final dark current map
         darkCurrent = Dark()
         # Perform the Dark.dark_current() method to compute the dark current map
@@ -262,7 +271,8 @@ if (np.sum(fileTests) != len(fileTests)):
           format(np.mean(masterDarks[thisBin].arr)))
         
         # Write darkCurrent Image object to disk
-        fits.writeto('MasterDark{0:g}.fits'.format(thisBin),
+        outFile = calibrationDir + 'MasterDark{0:g}.fits'.format(thisBin)
+        fits.writeto(outFile,
                      masterDarks[thisBin].arr.astype(np.float32),
                      darkImgList[0].header,
                      clobber = True)
@@ -270,11 +280,6 @@ if (np.sum(fileTests) != len(fileTests)):
         # Do a quick cleanup to make sure that memory survives
         del darkImgList
         del darkCurrent
-else:
-    for thisBin in uniqBins:
-        masterDarks.update({thisBin:
-                           Dark('MasterDark{0:g}.fits'.format(thisBin))})
-
 
 #==============================================================================
 # ***************************** FLATS *****************************************
@@ -308,13 +313,14 @@ for thisBand in uniqBands:
         for thisBin in uniqBins:
             # Construct the keyname and filename for this image
             keyname  = '{0:s}_{1:g}_{2:g}'.format(thisBand, thisAng, thisBin)
-            filename = 'MasterFlat{0:s}_{1:g}_{2:g}.fits'.format(
+            filename = calibrationDir + 'MasterFlat{0:s}_{1:g}_{2:g}.fits'.format(
               thisBand, thisAng, thisBin)
             
             # Test if the file exists
             if os.path.isfile(filename):
                 # Read in the file if it exists
-                print('\nLoading file {0:s} into masterFlat list'.format(filename))
+                print('\nLoading file into masterFlat list')
+                print(filename)
                 masterFlats.update({keyname:
                                     Flat(filename)})
             else:
@@ -433,6 +439,7 @@ reducedDir      = '/home/jordan/ThesisData/PRISM_Data/Reduced_data'
 scienceImgFiles = fileIndex['Filename'][sciBool]
 
 for file in scienceImgFiles:
+    pdb.set_trace()
     # Read in the science image from disk
     thisImg = Image(file)
     # Perform the overscan correction appropriate for this binning
