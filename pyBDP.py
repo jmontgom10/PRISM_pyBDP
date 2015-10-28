@@ -76,7 +76,6 @@ class Image(object):
         # Check the binning
 #        binning = np.unique((self.header['CRDELT1'], self.header['CRDELT2']))
 
-        
         # Compute the rebinned locations of the pre-scan and post-scan regions.
         overscanPos1 = overscanPos/self.binning
         sciencePos1  = sciencePos/self.binning
@@ -99,11 +98,14 @@ class Image(object):
         overscanPolyValues = np.polyval(overscanPolyCoeffs, rowInds)
         
         # Expand the overscan along the horizontal axis and subtract.
-        overscan  = np.tile(overscanPolyValues, (self.arr.shape[1],1)).T
+        overscan  = (np.tile(overscanPolyValues, (self.arr.shape[1],1)).
+                     astype(np.float32)).T
+        self.arr  = self.arr.astype(np.float32)
         self.arr -= overscan
         
         # Trim the array to include only the science data
-        self.arr  = self.arr[:, sciencePos1[0][0]:sciencePos1[1][0]]
+        self.arr  = self.arr[sciencePos1[0][1]:sciencePos1[1][1],
+                             sciencePos1[0][0]:sciencePos1[1][0]]
     
     def stacked_average(imgList, clipSigma = 3.0):
         """Compute the median filtered mean of a stack of images.
@@ -158,7 +160,6 @@ class Image(object):
                 # Stack the selected region of the images.
                 secRows = thisRows[1] - thisRows[0]
                 stack   = np.ma.zeros((numImg, secRows, nx), dtype = dataType)
-                flipCount = np.zeros((numImg, secRows, nx), dtype = np.int8)
                 for i in range(numImg):
                     stack[i,:,:] = imgList[i].arr[thisRows[0]:thisRows[1],:]
 
@@ -166,53 +167,35 @@ class Image(object):
             
                 # Iteratively clip outliers until answer converges.
                 # Use the stacked median for first image estimate.
-                imgEstimate = np.median(stack, axis = 0)
-                stackSigma  = stack.std(axis = 0)
-                outliers    = np.ndarray(stack.shape, dtype = bool)
-                outliers1   = outliers.copy()
+                outliers = np.zeros(stack.shape, dtype = bool)
                
-                # Setup vairables to track if the mask has converged
-                # and how many times the iteration 
-                numMaskChange = 1
-                iterCounter   = 0
-                
                 # This loop will iterate until the mask converges to an
-                # unchanging state, or until 40 iterations  have completed.
-                while (numMaskChange != 0) and (iterCounter < 12):
-                    print('\n\tBeginning iteration {0:g}'.format(iterCounter+1))
-                    
+                # unchanging state, or until clipSigma is reached.
+                numLoops  = round((clipSigma - 2)/0.2) + 1
+                numPoints = np.zeros((secRows, nx), dtype=int) + 16
+                scale     = np.zeros((secRows, nx)) + 2.0
+                for iLoop in range(numLoops):
+                    print('\tProcessing section for sigma = {0:g}'.format(2.0+iLoop*0.2))
                     # Loop through the stack, and find the outliers.
+                    imgEstimate = np.ma.median(stack, axis = 0).data
+                    stackSigma  = np.ma.std(stack, axis = 0).data
                     for j in range(numImg):
-                        deviation        = np.absolute(stack[j,:,:] - imgEstimate)
-                        outliers1[j,:,:] = deviation > clipSigma*stackSigma
-                    
-                    # Count the number of changed mask elements,
-                    # and set the new mask to match these outliers.
-                    maskChange    = outliers != outliers1
-                    flipCount    += maskChange
-                    numMaskChange = np.sum(maskChange)
-                    stack.mask    = outliers1
-                    print('\t{0:g} mask elements have changed'.format(numMaskChange))
-                    
-                    #Compute new stack statistics
-                    stackSigma   = stack.std(axis = 0)
-                    imgEstimate1 = stack.mean(axis = 0)
-                    
-                    #Save old variables for use in the next iteration
-                    outliers     = outliers1.copy()
-                    imgEstimate  = imgEstimate1.copy()
-                    iterCounter += 1
-                
+                        deviation       = np.absolute(stack.data[j,:,:] - imgEstimate)
+                        outliers[j,:,:] = (deviation > scale*stackSigma)
+
+                    # Save the outliers to the mask
+                    stack.mask = outliers                    
+                    # Save the number of unmasked points along AXIS
+                    numPoints1 = numPoints
+                    # Total up the new number of unmasked points...
+                    numPoints  = np.sum(np.invert(stack.mask), axis = 0)
+                    # Figure out which columns have improved results
+                    nextScale  = (numPoints != numPoints1)
+                    scale     += 0.2*nextScale
+                    if np.sum(nextScale) == 0: break
+
                 # Now that this section has been averaged, store it in output.
-                finalImg[thisRows[0]:thisRows[1],:] = imgEstimate
-                
-                # Check for pixels where the clipping eliminated entire stack.
-                blockedPix = (np.sum(outliers, axis = 0) == numImg)
-                if np.sum(blockedPix) > 0:
-                    print('\n\tReplacing blocked pixels with median estimator')
-                    medianImg            = np.median(stack, axis = 0)
-                    finalImg[blockedPix] = medianImg[blockedPix]
-                    del medianImg
+                finalImg[thisRows[0]:thisRows[1],:] = np.mean(stack, axis = 0)
             return finalImg
         else:
             return imgList[0].arr
