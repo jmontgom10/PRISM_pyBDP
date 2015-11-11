@@ -181,6 +181,8 @@ for file in scienceImgFiles:
     thisImg.arr = thisImg.arr/masterFlats[keyname].arr
     
     outFile = reducedDir + delim + file.split(delim).pop()
+    
+    # TODO should this be changed to use the Image.write() method?
     fits.writeto(outFile,
                  thisImg.arr,
                  thisImg.header,

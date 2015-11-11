@@ -68,7 +68,7 @@ if not os.path.isfile(indexFile):
     startTime = os.times().elapsed
     # Begin by initalizing some arrays to store the image classifications
     obsType  = []
-    target   = []
+    group    = []
     binType  = []
     polAng   = []
     waveBand = []
@@ -81,10 +81,10 @@ if not os.path.isfile(indexFile):
         
         # Classify each file type and binning
         obsType.append(fits.getval(file, 'OBSTYPE'))
-        tmpTarg = fits.getval(file, 'OBJECT')
-        if len(tmpTarg) < 1:
-            tmpTarg = 'blank'
-        target.append(tmpTarg)
+        tmpGroup = fits.getval(file, 'OBJECT')
+        if len(tmpGroup) < 1:
+            tmpGroup = 'blank'
+        group.append(tmpGroup)
         polAng.append(fits.getval(file, 'POLPOS'))
         waveBand.append(fits.getval(file, 'FILTNME3'))
         
@@ -128,7 +128,7 @@ if not os.path.isfile(indexFile):
     
     # Write the file index to disk
     fileIndex = Table([fileList, obsType, waveBand, target, polAng, binType, lights],
-                      names = ['Filename', 'Data',  'Waveband', 'Target',
+                      names = ['Filename', 'Data',  'Waveband', 'Group',
                       'Polaroid Angle', 'Binning', 'Lights'])
     ascii.write(fileIndex, indexFile)
 else:
