@@ -11,6 +11,7 @@ import pdb
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy.table import Table
+from astropy.table import Column
 from astropy.io import fits, ascii
 from scipy import stats
 
@@ -40,20 +41,13 @@ subDirs = ['20150117\\PRISM_Images\\', \
 # This line prepends the rawPath variable to each element in the subDirs list
 rawDirs = [rawPath + subDir for subDir in subDirs]
 
+# Define the directory into which the average calibration images will be placed
 calibrationDir = 'C:\\Users\\Jordan\\FITS Data\\PRISM_Data\\Calibration'
 
-#Loop through each night and build a list of all the files in observing run
-fileList = []
-for night in subDirs:
-    nightPath = rawPath + night
-    for file in os.listdir(nightPath):
-        fileList.extend([os.path.join(nightPath, file)])
+# Reduced directory (for saving the final images)
+# This is where the "fileIndex.csv" file will be located
+reducedDir = 'C:\\Users\\Jordan\\FITS Data\\PRISM_Data\\Reduced_data'
 
-#Sort the fileList
-fileNums = [''.join((file.split(delim).pop().split('.'))[0:2]) for file in fileList]
-sortInds = np.argsort(np.array(fileNums, dtype = np.int))
-fileList = [fileList[ind] for ind in sortInds]
-pdb.set_trace()
 # These are the overscan regions for all PRISM frames at 1x1 binning
 #                       ((x1,y1), (x2, y2))
 overscanPos = np.array([[2110, 8],[2177, 2059]], dtype = np.int32)
@@ -64,33 +58,45 @@ sciencePos  = np.array([[70,  32],[2070, 2032]], dtype = np.int32)
 # Build an index of the file type and binning, and write it to disk
 #==============================================================================
 # Check if a file index already exists... if it does then just read it in
-indexFile = 'fileIndex.dat'
+indexFile = reducedDir + delim + 'fileIndex.dat'
 if not os.path.isfile(indexFile):
-    # Loop through each night and test for image type
+    #Loop through each night and build a list of all the files in observing run
+    fileList = []
+    for night in subDirs:
+        nightPath = rawPath + night
+        for file in os.listdir(nightPath):
+            fileList.extend([os.path.join(nightPath, file)])
+
+    #Sort the fileList
+    fileNums = [''.join((file.split(delim).pop().split('.'))[0:2]) for file in fileList]
+    sortInds = np.argsort(np.array(fileNums, dtype = np.int64))
+    fileList = [fileList[ind] for ind in sortInds]
+
+    # Test for image type
     print('\nCategorizing files into "BIAS", "DARK", "FLAT", "OBJECT"\n')
     startTime = os.times().elapsed
     # Begin by initalizing some arrays to store the image classifications
     obsType  = []
-    group    = []
+    name     = []
     binType  = []
     polAng   = []
     waveBand = []
     lights   = []
     fileCounter = 0
     percentage  = 0
-    
+
     #Loop through each file in the fileList variable
     for file in fileList:
-        
+
         # Classify each file type and binning
         obsType.append(fits.getval(file, 'OBSTYPE'))
-        tmpGroup = fits.getval(file, 'OBJECT')
-        if len(tmpGroup) < 1:
-            tmpGroup = 'blank'
-        group.append(tmpGroup)
+        tmpName = fits.getval(file, 'OBJECT')
+        if len(tmpName) < 1:
+            tmpName = 'blank'
+        name.append(tmpName)
         polAng.append(fits.getval(file, 'POLPOS'))
         waveBand.append(fits.getval(file, 'FILTNME3'))
-        
+
         # Try to grab the lights on/off status from the comments
         try:
             comments = fits.getval(file, 'COMMENT')
@@ -98,15 +104,15 @@ if not os.path.isfile(indexFile):
                 valueWritten = False
                 if 'lights on' in comment.lower():
                     lights.append('lights on')
-                    valueWritten = True                    
+                    valueWritten = True
                 elif 'lights off' in comment.lower():
                     lights.append('lights off')
                     valueWritten = True
-            
+
             # If no comments on the lights were found, write 'N/A'
             if not valueWritten:
                 lights.append('N/A')
-        
+
         # If there are no comments, then the lights are not relevant
         except KeyError:
             lights.append('N/A')
@@ -114,7 +120,7 @@ if not os.path.isfile(indexFile):
         binTest  = fits.getval(file, 'CRDELT*')
         if binTest[0] == binTest[1]:
             binType.append(int(binTest[0]))
-    
+
         # Count the files completed and print update progress message
         fileCounter += 1
         percentage1  = np.floor(fileCounter/len(fileList)*100)
@@ -122,22 +128,101 @@ if not os.path.isfile(indexFile):
         if percentage1 != percentage:
             print('completed {0:3g}%'.format(percentage1), end="\r")
         percentage = percentage1
-        
+
         if len(lights) != fileCounter:
             pdb.set_trace()
-     
+
     endTime = os.times().elapsed
+    numFiles = len(fileList)
     print('\nFile processing completed in {0:g} seconds'.format(endTime -startTime))
-    
+
+    # Query the user about the targets of each group...
+    # Write the file index to disk
+    fileIndex = Table([fileList, name, waveBand, polAng, binType],
+                      names = ['Filename', 'Name', 'Waveband', 'Polaroid Angle', 'Binning'])
+    fileIndex.add_column(Column(name='Use',
+                                data=np.ones((numFiles)),
+                                dtype=np.int),
+                                index = 0)
+
+    # Group by "Name"
+    groupFileIndex = fileIndex.group_by('Name')
+
+    # Grab the file-number orderd indices for the groupFileIndex
+    fileIndices = np.argsort(groupFileIndex['Filename'])
+
+    # Loop through each "Name" and assign it a "Target" value
+    targetList = []
+    ditherList = []
+    for group in groupFileIndex.groups:
+        # Select this groups properties
+        thisName = np.unique(group['Name'])
+
+        # Test if the group name truely is unique
+        if len(thisName) == 1:
+            thisName = thisName[0]
+        else:
+            print('There is more than one name in this group!')
+            pdb.set_trace()
+
+        # Count the number of elements in this group
+        groupLen = len(group)
+
+        # Add the "Target" column to the fileIndex
+        thisTarget = input('\nEnter the target for group "{0}": '.format(thisName))
+        thisTarget = [thisTarget]*groupLen
+
+        # Ask the user to supply the dither pattern for this group
+        thisDitherEntered = False
+        while not thisDitherEntered:
+            # Have the user select option 1 or 2
+            print('\nEnter the dither patttern for group "{0}": '.format(thisName))
+            thisDither = input('[1: ABBA, 2: HEX]')
+
+            # Test if the numbers 1 or 2 were entered
+            try:
+                thisDither = np.int(thisDither)
+                if (thisDither == 1) or (thisDither == 2):
+                    # If so, then reassign as a string
+                    thisDither = ['ABBA', 'HEX'][(thisDither-1)]
+                    thisDitherEntered = True
+            except:
+                print('Response not recognized')
+
+        # Create a list of "thisDither" entries
+        thisDither = [thisDither]*groupLen
+
+        # Add these elements to the target list
+        targetList.extend(thisTarget)
+        ditherList.extend(thisDither)
+
+    pdb.set_trace()
+    # Add the "Target" and "Dither columns"
+    groupFileIndex.add_column(Column(name='Target',
+                                data=np.array(targetList)),
+                                index = 2)
+    groupFileIndex.add_column(Column(name='Dither',
+                                data=np.array(ditherList)),
+                                index = 7)
+
+    # Re-sort by file-number
+    fileSortInds = np.argsort(groupFileIndex['Filename'])
+    fileIndex1   = groupFileIndex[fileSortInds]
+
+    # Write file to disk
+    fileIndex1.write(indexFile, format='csv')
+
     # Write the file index to disk
     fileIndex = Table([fileList, obsType, waveBand, target, polAng, binType, lights],
                       names = ['Filename', 'Data',  'Waveband', 'Group',
                       'Polaroid Angle', 'Binning', 'Lights'])
-    ascii.write(fileIndex, indexFile)
+    # ascii.write(fileIndex, indexFile)
+    fileIndex.write(indexFile, format='csv')
 else:
     # Read the fileIndex back in as an astropy Table
     print('\nReading file index from disk')
-    fileIndex = ascii.read(indexFile)#, guess=False, delimiter=' ')
+    # fileIndex = ascii.read(indexFile)#, guess=False, delimiter=' ')
+    fileIndex = Table.read(indexFile, format='csv')
 
 biasBool = (fileIndex['Data'] == 'BIAS')
 darkBool = (fileIndex['Data'] == 'DARK')
@@ -171,22 +256,22 @@ for thisBin in uniqBins:
                              Bias(filename)})
     else:
         print('\nProcessing biases with ({0:g}x{0:g}) binning'.format(thisBin))
-        
+
         # Construct the key name for this bias image
         biasKey = '{0:g}'.format(thisBin)
-        
+
         # Select the bias images with the correct binning level
         biasImgFiles = fileIndex['Filename'][biasBool & (binType == thisBin)]
-        
+
         # Loop through each of the files and add them to the biasImgList list
         biasImgList  = []
         for file in biasImgFiles:
             biasImgList.append(Bias(file))
-        
+
         #=========================================================================
         # **************************** OVERSCAN **********************************
-        # Use overscan regions from the bias images and use them to figure 
-        # out what overscan polynomial should be fit to both PRESCAN and 
+        # Use overscan regions from the bias images and use them to figure
+        # out what overscan polynomial should be fit to both PRESCAN and
         # POSTSCAN regions.
         #=========================================================================
         # Find the best fitting polynomial to the prescan and postscan regions.
@@ -198,7 +283,7 @@ for thisBin in uniqBins:
         for bias in biasImgList:
             bias.overscan_correction(overscanPos, sciencePos,
                                      overscanPolyDegree)
-        
+
         # Perform the Bias.master_bias() method to compute the master bias map
         #
         #
@@ -210,16 +295,16 @@ for thisBin in uniqBins:
         masterBias.arr = Bias.master_bias(biasImgList)
         masterBias.header = biasImgList[0].header.copy()
         masterBiases.update({thisBin: masterBias})
-        
+
         # Write masterBias object to disk
         fits.writeto(filename,
                      (masterBiases[thisBin].arr).astype(np.float32),
                      biasImgList[0].header,
                      clobber = True)
-        
+
         print('\nThe mean bias level is {0:g} counts\n'.
           format(np.mean(masterBiases[thisBin].arr)))
-        
+
         # Do a quick cleanup to make sure that memory survives
         del biasImgList
         del masterBias
@@ -254,16 +339,16 @@ for thisBin in uniqBins:
                             Dark(filename)})
     else:
         print('\nProcessing darks with ({0:g}x{0:g}) binning'.format(thisBin))
-        
+
         # Select the bias images with the correct binning level
         darkImgFiles = fileIndex['Filename'][darkBool & (binType == thisBin)]
-        
+
         print('\nProceeding to remove overscans and bias from the dark images')
-        
+
         # Select the correct polynomial order
         polyInd            = (overscanPolyDegrees['Binning'] == thisBin)
         overscanPolyDegree = int((overscanPolyDegrees[polyInd])['Polynomial'])
-        
+
         # Loop through each of the files and add them to the biasImgList list
         darkImgList  = []
         for file in darkImgFiles:
@@ -272,7 +357,7 @@ for thisBin in uniqBins:
                                          overscanPolyDegree)
             thisDark.arr = thisDark.arr - masterBiases[thisBin].arr
             darkImgList.append(thisDark)
-    
+
         # Generate a Dark(Image) object to store the final dark current map
         darkCurrent = Dark()
         # Perform the Dark.dark_current() method to compute the dark current map
@@ -281,14 +366,14 @@ for thisBin in uniqBins:
         masterDarks.update({thisBin: darkCurrent})
         print('\nThe mean dark current is {0:g} counts/second'.
           format(np.mean(masterDarks[thisBin].arr)))
-        
+
         # Write darkCurrent Image object to disk
         outFile = calibrationDir + 'MasterDark{0:g}.fits'.format(thisBin)
         fits.writeto(outFile,
                      masterDarks[thisBin].arr.astype(np.float32),
                      darkImgList[0].header,
                      clobber = True)
-        
+
         # Do a quick cleanup to make sure that memory survives
         del darkImgList
         del darkCurrent
@@ -328,7 +413,7 @@ for thisBand in uniqBands:
             keyname  = '{0:s}_{1:g}_{2:g}'.format(thisBand, thisAng, thisBin)
             filename = calibrationDir + 'MasterFlat{0:s}_{1:g}_{2:g}.fits'.format(
               thisBand, thisAng, thisBin)
-            
+
             # Test if the file exists
             if os.path.isfile(filename):
                 # Read in the file if it exists
@@ -342,23 +427,23 @@ for thisBand in uniqBands:
                 print('band    = {0:s}'.format(thisBand))
                 print('polAng  = {0:g}'.format(thisAng))
                 print('binning = ({0:g}x{0:g})'.format(thisBin))
-                
+
                 flatOnImgFiles = fileIndex['Filename'][flatBool &
                                                        (polAng == thisAng) &
                                                        (binType == thisBin) &
                                                        (lights == 'lights on')]
-                
+
                 flatOffImgFiles = fileIndex['Filename'][flatBool &
                                                         (polAng == thisAng) &
                                                         (binType == thisBin) &
                                                         (lights == 'lights off')]
-                
+
                 print('\nProceeding to remove overscans and bias from the flat images')
 
-                # Select the correct polynomial order for this binning 
+                # Select the correct polynomial order for this binning
                 polyInd            = (overscanPolyDegrees['Binning'] == thisBin)
                 overscanPolyDegree = int((overscanPolyDegrees[polyInd])['Polynomial'])
-                
+
                 # Loop through each of the files and add them to the biasImgList list
                 flatOnImgList  = []
                 for file in flatOnImgFiles:
@@ -369,7 +454,7 @@ for thisBand in uniqBands:
                     # test for if it's another image or a similarly sized array
                     thisFlat.arr = thisFlat.arr - masterBiases[thisBin].arr
                     flatOnImgList.append(thisFlat)
-                
+
                 flatOffImgList = []
                 for file in flatOffImgFiles:
                     thisFlat = Flat(file)
@@ -377,7 +462,7 @@ for thisBand in uniqBands:
                                                  overscanPolyDegree)
                     thisFlat.arr = thisFlat.arr - masterBiases[thisBin].arr
                     flatOffImgList.append(thisFlat)
-                
+
                 # Compute AVERAGE flat 'lights on' image
                 flatImg = Flat.master_flat(flatOnImgList)
 
@@ -385,17 +470,17 @@ for thisBand in uniqBands:
                 if len(flatOffImgList) > 0:
                     flatOffImg = Flat.master_flat(flatOffImgList)
                     flatImg   -= flatOffImg
-                
+
                 # Normalize the flat field by the mode
                 # Compute the positions of the non-overscan region
                 sciencePos1 = sciencePos/thisBin
                 flatModeImg = flatImg[sciencePos1[0][1]:sciencePos1[1][1], \
                                       sciencePos1[0][0]:sciencePos1[1][0]]
-                
+
                 # Compute the number of bins that will be needed to find mode
                 flatBins = np.ceil(0.1*(np.max(flatModeImg) -
                                          np.min(flatModeImg)))
-                
+
                 # Generate a histogram of the flat field
                 hist, flatBins = np.histogram(flatModeImg.flatten(), flatBins)
 
@@ -406,27 +491,27 @@ for thisBand in uniqBands:
                 else:
                     print('The mode is ambiguous')
                     pdb.set_trace()
-                
+
                 # Estimate flatMode from histogram maximum
                 flatMode = np.mean(flatBins[maxInd:maxInd+2])
-                
+
                 # Grab the data within 100 counts of the estimated mode
                 # Use kernel density estimator to find a more accurate mode
                 print('Evaluating gaussian kernel density estimator')
                 flatModeData = flatModeImg[np.where(
                   np.abs(flatModeImg - flatMode) < 100)]
                 kernel = stats.gaussian_kde(flatModeData)
-                
+
                 # Establish bins for evaluating the resultant
                 xmin     = np.floor(flatMode - 30)
                 xmax     = np.ceil(flatMode + 10)
                 flatBins = np.mgrid[xmin:xmax:0.5]
                 density  = kernel.evaluate(flatBins)
                 flatMode = flatBins[np.where(density == density.max())]
-                
+
                 # Normalize flatImg
                 flatImg /= flatMode
-                
+
                 # TODO replace zeros with average of surrounding non-zero values
                 # Replace zero values in overscan regions
                 # to prevent division problems later.
@@ -434,7 +519,7 @@ for thisBand in uniqBands:
                 flatImg[zeroInds] = 1
 
                 masterFlats.update({keyname:flatImg})
-                
+
                 # Write normalized flat to disk
                 fits.writeto(filename,
                              (masterFlats[keyname]).astype(np.float32),

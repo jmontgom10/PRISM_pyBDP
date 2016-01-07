@@ -36,6 +36,9 @@ rawDirs = [rawPath + subDir for subDir in subDirs]
 
 calibrationDir = '/home/jordan/ThesisData/PRISM_Data/Calibration/'
 
+# Reduced directory for saving the final images
+reducedDir      = '/home/jordan/ThesisData/PRISM_Data/Reduced_data'
+
 #Loop through each night and build a list of all the files in observing run
 fileList = []
 for night in subDirs:
@@ -110,7 +113,7 @@ masterDarks = {}
 for thisBin in uniqBins:
     # Construct filename for this dark
     filename = calibrationDir + 'MasterDark{0:g}.fits'.format(thisBin)
-    
+
     # Read in the file
     print('\nLoading file into masterDark list')
     print(filename)
@@ -143,7 +146,7 @@ for thisBand in uniqBands:
             keyname  = '{0:s}_{1:g}_{2:g}'.format(thisBand, thisAng, thisBin)
             filename = calibrationDir + 'MasterFlat{0:s}_{1:g}_{2:g}.fits'.format(
               thisBand, thisAng, thisBin)
-            
+
             # Read in the masterFlat file
             print('\nLoading file into masterFlat list')
             print(filename)
@@ -154,34 +157,33 @@ for thisBand in uniqBands:
 # **************************** SCIENCE ****************************************
 # Setup the paths to the
 #==============================================================================
-reducedDir      = '/home/jordan/ThesisData/PRISM_Data/Reduced_data'
 scienceImgFiles = fileIndex['Filename'][sciBool]
 print('\nBeginning to reduce science data.')
 for file in scienceImgFiles:
     # Read in the science image from disk
     thisImg = Image(file)
     # Perform the overscan correction appropriate for this binning
-    polyInd            = (overscanPolyDegrees['Binning'] == thisImg.binning)    
+    polyInd            = (overscanPolyDegrees['Binning'] == thisImg.binning)
     overscanPolyDegree = int((overscanPolyDegrees[polyInd])['Polynomial'])
     thisImg.overscan_correction(overscanPos, sciencePos,
                                 overscanPolyDegree)
-    
+
     # Correct the 2D bias structure
     thisImg.arr = thisImg.arr - masterBiases[thisImg.binning].arr
-    
+
     # Subtract dark current (not necessary in this case!)
 #    avg, sig = np.median(thisImg.arr), thisImg.arr.std()
 #    plt.imshow(thisImg.arr, vmin = avg-0.5*sig, vmax = avg+0.5*sig)
 #    plt.show()
-    
+
     # Corect the flat-field structure
     thisBand = thisImg.header['FILTNME3']
     thisAng  = thisImg.header['POLPOS']
     keyname  = '{0:s}_{1:g}_{2:g}'.format(thisBand, thisAng, thisImg.binning)
     thisImg.arr = thisImg.arr/masterFlats[keyname].arr
-    
+
     outFile = reducedDir + delim + file.split(delim).pop()
-    
+
     # TODO should this be changed to use the Image.write() method?
     fits.writeto(outFile,
                  thisImg.arr,
