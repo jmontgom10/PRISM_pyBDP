@@ -13,7 +13,10 @@ import matplotlib.pyplot as plt
 from astropy.table import Table
 from astropy.io import fits, ascii
 from scipy import stats
-from pyBDP import Image, Bias, Dark, Flat
+
+# Add the AstroImage class
+sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
+from AstroImage import AstroImage, Bias, Dark, Flat
 
 
 #Setup the path delimeter for this operating system
@@ -25,11 +28,11 @@ delim = os.path.sep
 # and some of the subdirectory structure to find the actual .FITS images
 #==============================================================================
 # This is the location of the raw data for the observing run
-rawPath = '/home/jordan/ThesisData/PRISM_Data/Raw_data/'
+rawPath = 'C:\\Users\\Jordan\\FITS Data\\PRISM_Data\\Raw_data\\'
 # This is a list of strings containing the subdirectory structure for each night
-subDirs = ['20150117/PRISM_Images/', \
-           '20150118/PRISM_Images/', \
-           '20150119/PRISM_Images/']
+subDirs = ['20150117\\PRISM_Images\\', \
+           '20150118\\PRISM_Images\\', \
+           '20150119\\PRISM_Images\\']
 
 # This is a list of strings containing the prefix of the filenames
 #filePrefix = ['20150117', '20150118', '20150119']
@@ -37,7 +40,7 @@ subDirs = ['20150117/PRISM_Images/', \
 # This line prepends the rawPath variable to each element in the subDirs list
 rawDirs = [rawPath + subDir for subDir in subDirs]
 
-calibrationDir = '/home/jordan/ThesisData/PRISM_Data/Calibration/'
+calibrationDir = 'C:\\Users\\Jordan\\FITS Data\\PRISM_Data\\Calibration'
 
 #Loop through each night and build a list of all the files in observing run
 fileList = []
@@ -50,7 +53,7 @@ for night in subDirs:
 fileNums = [''.join((file.split(delim).pop().split('.'))[0:2]) for file in fileList]
 sortInds = np.argsort(np.array(fileNums, dtype = np.int))
 fileList = [fileList[ind] for ind in sortInds]
-
+pdb.set_trace()
 # These are the overscan regions for all PRISM frames at 1x1 binning
 #                       ((x1,y1), (x2, y2))
 overscanPos = np.array([[2110, 8],[2177, 2059]], dtype = np.int32)
