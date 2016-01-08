@@ -19,7 +19,9 @@ the AstroImage dependencies.
 This package contains three scripts for reducing CCD data from the PRISM
 instrument on the 1.8 m Perkins telescope. Each script is numbered, and the
 scripts should be executed in their numbered order, as in
-```$ python 01_buildIndex.py
+
+```
+$ python 01_buildIndex.py
 ```
 
 Each script contains some code which needs to be modified by the user before
