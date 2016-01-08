@@ -22,50 +22,26 @@ delim = os.path.sep
 # and some of the subdirectory structure to find the actual .FITS images
 #==============================================================================
 # This is the location of the raw data for the observing run
-rawPath = '/home/jordan/ThesisData/PRISM_Data/Raw_data/'
-# This is a list of strings containing the subdirectory structure for each night
-subDirs = ['20150117/PRISM_Images/', \
-           '20150118/PRISM_Images/', \
-           '20150119/PRISM_Images/']
+rawDir = 'C:\\Users\\Jordan\\FITS Data\\PRISM_data\\raw_data'
 
-# This is a list of strings containing the prefix of the filenames
-#filePrefix = ['20150117', '20150118', '20150119']
+# Define the path to the parent directory for all pyBDP products
+pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data'
 
-# This line prepends the rawPath variable to each element in the subDirs list
-rawDirs = [rawPath + subDir for subDir in subDirs]
+# Define the directory into which the average calibration images will be placed
+calibrationDir = os.path.join(pyBDP_data, 'master_calibration_images')
 
-calibrationDir = '/home/jordan/ThesisData/PRISM_Data/Calibration/'
-
-# Reduced directory for saving the final images
-reducedDir      = '/home/jordan/ThesisData/PRISM_Data/Reduced_data'
-
-#Loop through each night and build a list of all the files in observing run
-fileList = []
-for night in subDirs:
-    nightPath = rawPath + night
-    for file in os.listdir(nightPath):
-        fileList.extend([os.path.join(nightPath, file)])
-
-#Sort the fileList
-fileNums = [''.join((file.split(delim).pop().split('.'))[0:2]) for file in fileList]
-sortInds = np.argsort(np.array(fileNums, dtype = np.int))
-fileList = [fileList[ind] for ind in sortInds]
+# Reduced directory (for saving the final images)
+reducedDir = os.path.join(pyBDP_data, 'pyBDP_reduced_images')
 
 # These are the overscan regions for all PRISM frames at 1x1 binning
 #                       ((x1,y1), (x2, y2))
 overscanPos = np.array([[2110, 8],[2177, 2059]], dtype = np.int32)
 sciencePos  = np.array([[70,  32],[2070, 2032]], dtype = np.int32)
 
-#==============================================================================
-# ***************************** INDEX *****************************************
-# Build an index of the file type and binning, and write it to disk
-#==============================================================================
-# Check if a file index already exists... if it does then just read it in
-indexFile = 'fileIndex.dat'
-
 # Read the fileIndex back in as an astropy Table
 print('\nReading file index from disk')
-fileIndex = ascii.read(indexFile)
+indexFile = os.path.join(pyBDP_data, 'rawFileIndex.csv')
+fileIndex = Table.read(indexFile, format='csv')
 
 biasBool = (fileIndex['Data'] == 'BIAS')
 darkBool = (fileIndex['Data'] == 'DARK')
@@ -88,7 +64,8 @@ masterBiases = {}
 binPolyDegrees = []
 for thisBin in uniqBins:
     # Construct the filename for this bias.
-    filename = calibrationDir + 'MasterBias{0:g}.fits'.format(thisBin)
+    filename = os.path.join(calibrationDir,
+        'MasterBias{0:g}.fits'.format(thisBin))
 
     # Read in the masterBias file
     print('\nLoading file into masterBias list')
@@ -97,7 +74,8 @@ for thisBin in uniqBins:
                          Bias(filename)})
 
 # Read in the overscan polynomial degrees
-overscanPolyDegrees = ascii.read('overscanPolynomials.dat')
+overscanPolyFile = os.path.join(pyBDP_data, 'overscanPolynomials.dat')
+overscanPolyDegrees = Table.read(overscanPolyFile, format = 'ascii')
 
 
 #==============================================================================
@@ -112,7 +90,8 @@ masterDarks = {}
 
 for thisBin in uniqBins:
     # Construct filename for this dark
-    filename = calibrationDir + 'MasterDark{0:g}.fits'.format(thisBin)
+    filename = os.path.join(calibrationDir,
+        'MasterDark{0:g}.fits'.format(thisBin))
 
     # Read in the file
     print('\nLoading file into masterDark list')
@@ -144,8 +123,9 @@ for thisBand in uniqBands:
         for thisBin in uniqBins:
             # Construct the keyname and filename for this image
             keyname  = '{0:s}_{1:g}_{2:g}'.format(thisBand, thisAng, thisBin)
-            filename = calibrationDir + 'MasterFlat{0:s}_{1:g}_{2:g}.fits'.format(
-              thisBand, thisAng, thisBin)
+            filename = os.path.join(calibrationDir,
+                'MasterFlat{0:s}_{1:g}_{2:g}.fits'.format(
+              thisBand, thisAng, thisBin))
 
             # Read in the masterFlat file
             print('\nLoading file into masterFlat list')

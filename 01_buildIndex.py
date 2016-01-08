@@ -3,6 +3,7 @@
 #Import whatever modules will be used
 import os
 import sys
+import time
 import pdb
 import numpy as np
 import matplotlib.pyplot as plt
@@ -55,7 +56,7 @@ delim = os.path.sep
 # and some of the subdirectory structure to find the actual .FITS images
 #==============================================================================
 # This is the location of the raw data for the observing run
-rawDir   = 'C:\\Users\\Jordan\\FITS Data\\PRISM_Data\\Raw_data\\'
+rawDir   = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\raw_data'
 fileList = recursive_file_search(rawDir, exten='.fits')
 
 #Sort the fileList
@@ -64,12 +65,14 @@ fileNums = [file.split('_')[0] for file in fileNums]
 sortInds = np.argsort(np.array(fileNums, dtype = np.int64))
 fileList = [fileList[ind] for ind in sortInds]
 
+# Define the path to the parent directory for all pyBDP products
+pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data'
+
 # Define the directory into which the average calibration images will be placed
-calibrationDir = 'C:\\Users\\Jordan\\FITS Data\\PRISM_Data\\Calibration'
+calibrationDir = os.path.join(pyBDP_data, 'master_calibration_images')
 
 # Reduced directory (for saving the final images)
-# This is where the "fileIndex.csv" file will be located
-reducedDir = 'C:\\Users\\Jordan\\FITS Data\\PRISM_Data\\Reduced_data'
+reducedDir = os.path.join(pyBDP_data, 'pyBDP_reduced_images')
 
 # These are the overscan regions for all PRISM frames at 1x1 binning
 #                       ((x1,y1), (x2, y2))
@@ -80,15 +83,15 @@ sciencePos  = np.array([[70,  32],[2070, 2032]], dtype = np.int32)
 # ***************************** INDEX *****************************************
 # Build an index of the file type and binning, and write it to disk
 #==============================================================================
-# Check if a file index already exists... if it does then just read it in
-indexFile = rawDir + delim + 'fileIndex.csv'
 
+# Define the path to the rawFileIndex.csv file
+indexFile = os.path.join(pyBDP_data, 'rawFileIndex.csv')
 # Test for image type
 print('\nCategorizing files into "BIAS", "DARK", "FLAT", "OBJECT"\n')
-startTime = os.times().elapsed
+startTime = time.time()
 # Begin by initalizing some arrays to store the image classifications
-obsType  = []
 name     = []
+data     = []
 binType  = []
 polAng   = []
 waveBand = []
@@ -100,7 +103,7 @@ percentage  = 0
 for file in fileList:
 
     # Classify each file type and binning
-    obsType.append(fits.getval(file, 'OBSTYPE'))
+    data.append(fits.getval(file, 'OBSTYPE'))
     tmpName = fits.getval(file, 'OBJECT')
     if len(tmpName) < 1:
         tmpName = 'blank'
@@ -143,18 +146,14 @@ for file in fileList:
     if len(lights) != fileCounter:
         pdb.set_trace()
 
-endTime = os.times().elapsed
+endTime = time.time()
 numFiles = len(fileList)
 print('\nFile processing completed in {0:g} seconds'.format(endTime -startTime))
 
 # Query the user about the targets of each group...
 # Write the file index to disk
-fileIndex = Table([fileList, name, waveBand, polAng, binType, lights],
-                  names = ['Filename', 'Name', 'Waveband', 'Polaroid Angle', 'Binning', 'Lights'])
-
-# Re-sort by file-number
-fileSortInds = np.argsort(fileIndex['Filename'])
-fileIndex1   = fileIndex[fileSortInds]
+fileIndex = Table([fileList, name, data, waveBand, polAng, binType, lights],
+                  names = ['Filename', 'Name', 'Data', 'Waveband', 'Polaroid Angle', 'Binning', 'Lights'])
 
 # Write file to disk
-fileIndex1.write(indexFile, format='csv')
+fileIndex.write(indexFile, format='csv')
