@@ -4,14 +4,18 @@
 #Import whatever modules will be used
 import os
 import sys
-import pdb
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy.table import Table
 from astropy.io import fits, ascii
 from scipy import stats
-from pyBDP import Image, Bias, Dark, Flat
 
+# Import AstroImage
+import astroimage as ai
+
+# Add the header handler to the BaseImage class
+from PRISM_header_handler import PRISM_header_handler
+ai.BaseImage.set_header_handler(PRISM_header_handler)
 
 #Setup the path delimeter for this operating system
 delim = os.path.sep
@@ -22,21 +26,18 @@ delim = os.path.sep
 # and some of the subdirectory structure to find the actual .FITS images
 #==============================================================================
 # This is the location of the raw data for the observing run
-rawDir = 'C:\\Users\\Jordan\\FITS Data\\PRISM_data\\raw_data'
+rawDir = 'C:\\Users\\Jordan\\FITS Data\\PRISM_data\\raw_data\\201612\\'
 
 # Define the path to the parent directory for all pyBDP products
-pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data'
+pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data\\201612\\'
 
 # Define the directory into which the average calibration images will be placed
 calibrationDir = os.path.join(pyBDP_data, 'master_calibration_images')
 
 # Reduced directory (for saving the final images)
 reducedDir = os.path.join(pyBDP_data, 'pyBDP_reduced_images')
-
-# These are the overscan regions for all PRISM frames at 1x1 binning
-#                       ((x1,y1), (x2, y2))
-overscanPos = np.array([[2110, 8],[2177, 2059]], dtype = np.int32)
-sciencePos  = np.array([[70,  32],[2070, 2032]], dtype = np.int32)
+if (not os.path.isdir(reducedDir)):
+    os.mkdir(reducedDir, 0o755)
 
 # Read the fileIndex back in as an astropy Table
 print('\nReading file index from disk')
@@ -49,7 +50,7 @@ flatBool = (fileIndex['Data'] == 'FLAT')
 sciBool  = (fileIndex['Data'] == 'OBJECT')
 waveBand = fileIndex['Waveband']
 polAng   = fileIndex['Polaroid Angle']
-binType  = fileIndex['Binning']
+binning  = fileIndex['Binning']
 lights   = fileIndex['Lights']
 
 #==============================================================================
@@ -58,24 +59,21 @@ lights   = fileIndex['Lights']
 #==============================================================================
 
 # Find the number of unique binnings used in biases
-uniqBins = np.unique(binType[biasBool])
+uniqBins = np.unique(binning)
 
-masterBiases = {}
-binPolyDegrees = []
+masterBiasDict = {}
 for thisBin in uniqBins:
     # Construct the filename for this bias.
-    filename = os.path.join(calibrationDir,
-        'MasterBias{0:g}.fits'.format(thisBin))
+    masterBiasFilename = 'MasterBias{0:g}.fits'.format(thisBin)
+    masterBiasFilename = os.path.join(calibrationDir, masterBiasFilename)
 
     # Read in the masterBias file
     print('\nLoading file into masterBias list')
-    print(filename)
-    masterBiases.update({thisBin:
-                         Bias(filename)})
+    print(masterBiasFilename)
 
-# Read in the overscan polynomial degrees
-overscanPolyFile = os.path.join(pyBDP_data, 'overscanPolynomials.dat')
-overscanPolyDegrees = Table.read(overscanPolyFile, format = 'ascii')
+    masterBias = ai.MasterBias.read(masterBiasFilename)
+    masterBias = masterBias.astype(np.float32)
+    masterBiasDict.update({thisBin: masterBias})
 
 
 #==============================================================================
@@ -83,96 +81,93 @@ overscanPolyDegrees = Table.read(overscanPolyFile, format = 'ascii')
 # Setup the paths to the dark images and compute the dark current map
 #==============================================================================
 
-# Find the number of unique binnings used in darks
-uniqBins = np.unique(binType[darkBool])
-
-masterDarks = {}
-
+masterDarkDict = {}
 for thisBin in uniqBins:
-    # Construct filename for this dark
-    filename = os.path.join(calibrationDir,
-        'MasterDark{0:g}.fits'.format(thisBin))
+    # Construct the filename for this dark.
+    masterDarkFilename = 'MasterDark{0:g}.fits'.format(thisBin)
+    masterDarkFilename = os.path.join(calibrationDir, masterDarkFilename)
 
     # Read in the file
     print('\nLoading file into masterDark list')
-    print(filename)
-    masterDarks.update({thisBin:
-                        Dark(filename)})
+    print(masterDarkFilename)
+
+    masterDark = ai.MasterDark.read(masterDarkFilename)
+    masterDark = masterDark.astype(np.float32)
+    masterDarkDict.update({thisBin: masterDark})
 
 #==============================================================================
 # ***************************** FLATS *****************************************
 # Setup the paths to the flat images and compute the flat map
 #==============================================================================
-
 # Find the number of unique wavebands used in flats
-uniqBands = np.unique(waveBand[flatBool])
+uniqBands = np.unique(waveBand)
 
-masterFlats = {}
+# Create an empty dictionary to store the masterFlatDict,
+# keyed to each band/polAng/binning combination
+masterFlatDict = {}
 
 #Loop through each waveband
 for thisBand in uniqBands:
     # Compute the unique values for the polaroid rotation angle
-    uniqPolAngs = np.unique(polAng[flatBool &
-                            (waveBand == thisBand)])
+    thisFlatWaveBool = np.logical_and(flatBool, (waveBand == thisBand))
+    thisFlatWaveInds = np.where(thisFlatWaveBool)
+    uniqPolAngs      = np.unique(polAng[thisFlatWaveInds])
+
     for thisAng in uniqPolAngs:
         # Compute the unique values for the binning level
-        uniqBins = np.unique(binType[flatBool &
-                             (waveBand == thisBand) &
-                             (polAng == thisAng)])
-        # TODO replace binNumber syntax with dictionary syntax
+        thisFlatAngBool = np.logical_and(thisFlatWaveBool, (polAng == thisAng))
+        thisFlatAngInds = np.where(thisFlatAngBool)
+        uniqBins        = np.unique(binning[thisFlatAngInds]).astype(int)
+
         for thisBin in uniqBins:
-            # Construct the keyname and filename for this image
-            keyname  = '{0:s}_{1:g}_{2:g}'.format(thisBand, thisAng, thisBin)
-            filename = os.path.join(calibrationDir,
-                'MasterFlat{0:s}_{1:g}_{2:g}.fits'.format(
-              thisBand, thisAng, thisBin))
+            # Construct the flatKey and filename for this image
+            flatKey            = (thisBand, thisAng, thisBin)
+            flatKeyStr         = '{0:s}_{1:g}_{2:g}'.format(*flatKey)
+            masterFlatFilename = 'MasterFlat' + flatKeyStr + '.fits'
+            masterFlatFilename = os.path.join(calibrationDir, masterFlatFilename)
 
             # Read in the masterFlat file
             print('\nLoading file into masterFlat list')
-            print(filename)
-            masterFlats.update({keyname:
-                                Flat(filename)})
+            print(masterFlatFilename)
+            masterFlat = ai.MasterFlat.read(masterFlatFilename)
+            masterFlat = masterFlat.astype(np.float32)
+            masterFlatDict.update({flatKey: masterFlat})
 
 #==============================================================================
 # **************************** SCIENCE ****************************************
 # Setup the paths to the
 #==============================================================================
-scienceImgFiles = fileIndex['Filename'][sciBool]
+# Grab the indices of the science images
+scienceInds     = np.where(sciBool)
+scienceImgFiles = fileIndex['Filename'][scienceInds]
+
 print('\nBeginning to reduce science data.')
-for file in scienceImgFiles:
-    # Read in the science image from disk
-    thisImg = Image(file)
-    # Perform the overscan correction appropriate for this binning
-    polyInd            = (overscanPolyDegrees['Binning'] == thisImg.binning)
-    overscanPolyDegree = int((overscanPolyDegrees[polyInd])['Polynomial'])
-    thisImg.overscan_correction(overscanPos, sciencePos,
-                                overscanPolyDegree)
+for filename in scienceImgFiles:
+    # Read in the raw science image from disk
+    rawScience = ai.RawScience.read(filename)
 
-    # Correct the 2D bias structure
-    thisImg.arr = thisImg.arr - masterBiases[thisImg.binning].arr
+    # Extract the information on this file
+    thisBand  = rawScience.filter
+    thisAng   = rawScience.header['POLPOS']
+    thisBin   = np.int(np.unique(rawScience.binning))
 
-    # Subtract dark current (not necessary in this case!)
-#    avg, sig = np.median(thisImg.arr), thisImg.arr.std()
-#    plt.imshow(thisImg.arr, vmin = avg-0.5*sig, vmax = avg+0.5*sig)
-#    plt.show()
+    # Construct the key for the flat dictionary
+    thisFlatKey = (thisBand, thisAng, thisBin)
 
-    # Corect the flat-field structure
-    thisBand = thisImg.header['FILTNME3']
-    thisAng  = thisImg.header['POLPOS']
-    keyname  = '{0:s}_{1:g}_{2:g}'.format(thisBand, thisAng, thisImg.binning)
-    thisImg.arr = thisImg.arr/masterFlats[keyname].arr
+    # Process this raw science image using the relevant calibration files
+    reducedScience = rawScience.process_image(
+        bias=masterBiasDict[thisBin],
+        dark=masterDarkDict[thisBin],
+        flat=masterFlatDict[thisFlatKey]
+    )
 
-    outFile = reducedDir + delim + file.split(delim).pop()
-
-    # TODO should this be changed to use the Image.write() method?
-    fits.writeto(outFile,
-                 thisImg.arr,
-                 thisImg.header,
-                 clobber = True)
+    # Write the file to disk
+    reducedFileName = os.path.join(
+        reducedDir,
+        os.path.basename(rawScience.filename)
+    )
+    reducedScience.write(reducedFileName, dtype=np.float32, clobber=True)
 
 # Let the user know everything is finished
 print('\n..........')
 print('Finished reducing science data.')
-#    avg, sig = np.median(thisImg.arr), thisImg.arr.std()
-#    plt.imshow(thisImg.arr, vmin = avg-0.5*sig, vmax = avg+0.5*sig)
-#    plt.show()

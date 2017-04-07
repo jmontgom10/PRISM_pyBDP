@@ -7,7 +7,6 @@
 #Import whatever modules will be used
 import os
 import sys
-import pdb
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy.table import Table
@@ -15,9 +14,12 @@ from astropy.table import Column
 from astropy.io import fits, ascii
 from scipy import stats
 
-# Add the AstroImage class
-sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
-from AstroImage import AstroImage, Bias, Dark, Flat
+# Import AstroImage
+import astroimage as ai
+
+# Add the header handler to the BaseImage class
+from PRISM_header_handler import PRISM_header_handler
+ai.BaseImage.set_header_handler(PRISM_header_handler)
 
 #Setup the path delimeter for this operating system
 delim = os.path.sep
@@ -28,33 +30,31 @@ delim = os.path.sep
 # and some of the subdirectory structure to find the actual .FITS images
 #==============================================================================
 # This is the location of the raw data for the observing run
-rawDir = 'C:\\Users\\Jordan\\FITS Data\\PRISM_data\\raw_data'
+rawDir = 'C:\\Users\\Jordan\\FITS Data\\PRISM_data\\raw_data\\201612\\'
 
 # Define the path to the parent directory for all pyBDP products
-pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data'
+pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data\\201612\\'
 
 # Define the directory into which the average calibration images will be placed
 calibrationDir = os.path.join(pyBDP_data, 'master_calibration_images')
-
-# Reduced directory (for saving the final images)
-reducedDir = os.path.join(pyBDP_data, 'pyBDP_reduced_images')
-
-# These are the overscan regions for all PRISM frames at 1x1 binning
-#                       ((x1,y1), (x2, y2))
-overscanPos = np.array([[2110, 8],[2177, 2059]], dtype = np.int32)
-sciencePos  = np.array([[70,  32],[2070, 2032]], dtype = np.int32)
+if (not os.path.isdir(calibrationDir)):
+    os.mkdir(calibrationDir, 0o755)
 
 # Read the fileIndex back in as an astropy Table
 print('\nReading file index from disk')
 indexFile = os.path.join(pyBDP_data, 'rawFileIndex.csv')
 fileIndex = Table.read(indexFile, format='csv')
+
+# Locate where the bias, dark, flat, and science images are in the index
 biasBool = (fileIndex['Data'] == 'BIAS')
 darkBool = (fileIndex['Data'] == 'DARK')
 flatBool = (fileIndex['Data'] == 'FLAT')
 sciBool  = (fileIndex['Data'] == 'OBJECT')
+
+# Extract lists of the waveband, polaroid angle, binning, and lights-on/off
 waveBand = fileIndex['Waveband']
 polAng   = fileIndex['Polaroid Angle']
-binType  = fileIndex['Binning']
+binning  = fileIndex['Binning']
 lights   = fileIndex['Lights']
 
 #==============================================================================
@@ -63,297 +63,294 @@ lights   = fileIndex['Lights']
 #==============================================================================
 
 # Find the number of unique binnings used in biases
-uniqBins = np.unique(binType[biasBool])
+uniqBins = np.unique(binning).astype(int)
 
-masterBiases = {}
-binPolyDegrees = []
+masterBiasDict = {}
 for thisBin in uniqBins:
     # Construct the filename for this bias.
-    filename = os.path.join(calibrationDir, 'MasterBias{0:g}.fits'.format(thisBin))
+    masterBiasFilename = 'MasterBias{0:g}.fits'.format(thisBin)
+    masterBiasFilename = os.path.join(calibrationDir, masterBiasFilename)
 
     # Test if there is a MasterBias image for this binnng level.
-    if os.path.isfile(filename):
+    if os.path.isfile(masterBiasFilename):
         # Read in the file if it exists
         print('\nLoading file into masterBias list')
-        print(filename)
-        masterBiases.update({thisBin:
-                             Bias(filename)})
-    else:
-        print('\nProcessing biases with ({0:g}x{0:g}) binning'.format(thisBin))
+        print(masterBiasFilename)
+        masterBias = ai.MasterBias.read(masterBiasFilename)
+        masterBias = masterBias.astype(np.float32)
+        masterBiasDict.update({thisBin: masterBias})
 
-        # Construct the key name for this bias image
-        biasKey = '{0:g}'.format(thisBin)
+        # If a masterBias was found, then berak out of the loop
+        continue
 
-        # Select the bias images with the correct binning level
-        biasImgFiles = fileIndex['Filename'][biasBool & (binType == thisBin)]
+    # Locate the raw bias images with this binning
+    thisBiasBinBool = np.logical_and(biasBool, (binning == thisBin))
+    thisBiasBinInds = np.where(thisBiasBinBool)
+    biasImgFiles    = fileIndex['Filename'][thisBiasBinInds]
 
-        # Loop through each of the files and add them to the biasImgList list
-        biasImgList  = []
-        for file in biasImgFiles:
-            biasImgList.append(Bias(file))
+    # Otherwise proceed to read in and process a masterBias image
+    print('\nProcessing {0} biases with ({1:g}x{1:g}) binning'.format(
+        biasImgFiles.size, thisBin))
 
-        #=========================================================================
-        # **************************** OVERSCAN **********************************
-        # Use overscan regions from the bias images and use them to figure
-        # out what overscan polynomial should be fit to both PRESCAN and
-        # POSTSCAN regions.
-        #=========================================================================
-        # Find the best fitting polynomial to the prescan and postscan regions.
-        overscanPolyDegree = Bias.overscan_polynomial(biasImgList, overscanPos)
-        binPolyDegrees.append(overscanPolyDegree)
-        print('\nOverscan region fit with {0:g}-order polynomial'.
-          format(overscanPolyDegree))
-        print('\nProceeding to remove overscans from the bias images')
-        for bias in biasImgList:
-            bias.overscan_correction(overscanPos, sciencePos,
-                                     overscanPolyDegree)
+    # Loop through each of the files and add them to the biasImgList list
+    biasImgList  = []
+    for filename in biasImgFiles:
+        # Read the raw bias image from the disk
+        rawBias = ai.RawBias.read(filename)
 
-        # Perform the Bias.master_bias() method to compute the master bias map
-        #
-        #
-        # TODO write a 'build master bias header' component
-        # of the 'master_bias' method.
-        #
-        # Generate masterBias Image object to save to disk
-        masterBias = Bias()
-        masterBias.arr = Bias.master_bias(biasImgList)
-        masterBias.header = biasImgList[0].header.copy()
-        masterBiases.update({thisBin: masterBias})
+        # Append the raw bias (overscan corrected) image to the list of biases
+        biasImgList.append(rawBias)
 
-        # Write masterBias object to disk
-        fits.writeto(filename,
-                     (masterBiases[thisBin].arr).astype(np.float32),
-                     biasImgList[0].header,
-                     clobber = True)
+    # Construct an ImageStack out of the bias image list
+    biasStack = ai.ImageStack(biasImgList)
 
-        print('\nThe mean bias level is {0:g} counts\n'.
-          format(np.mean(masterBiases[thisBin].arr)))
+    # Compute the master bias
+    masterBias = biasStack.combine_images()
 
-        # Do a quick cleanup to make sure that memory survives
-        del biasImgList
-        del masterBias
+    # Store the master bias in the dictionary of colibration data
+    masterBiasDict.update({thisBin: masterBias})
 
-# Check if the polynomial degrees for overscan correction have been saved
-overscanPolyFile = os.path.join(pyBDP_data, 'overscanPolynomials.dat')
-if not os.path.isfile(overscanPolyFile):
-    overscanPolyDegrees = Table([uniqBins, binPolyDegrees],
-                                 names = ['Binning', 'Polynomial'])
-    overscanPolyDegrees.write(overscanPolyFile,  format='ascii')
-else:
-    overscanPolyDegrees = Table.read(overscanPolyFile, format='ascii')
+    # Write masterBias object to disk
+    masterBias.write(masterBiasFilename, dtype=np.float32, clobber=True)
 
+    print('\nThe mean bias level is {0:g} counts\n'.
+      format(masterBias.data.mean()))
+
+    # Do a quick cleanup to make sure that memory survives
+    del biasStack
+    del masterBias
 
 #==============================================================================
 # ***************************** DARKS *****************************************
 # Setup the paths to the dark images and compute the dark current map
 #==============================================================================
 
-# Find the number of unique binnings used in darks
-uniqBins = np.unique(binType[darkBool])
-
-masterDarks = {}
-
+masterDarkDict = {}
 for thisBin in uniqBins:
-    # Construct filename for this dark
-    filename = os.path.join(calibrationDir, 'MasterDark{0:g}.fits'.format(thisBin))
-    # Test if darks have been computed for this binning level.
-    if os.path.isfile(filename):
+    # Construct the filename for this dark.
+    masterDarkFilename = 'MasterDark{0:g}.fits'.format(thisBin)
+    masterDarkFilename = os.path.join(calibrationDir, masterDarkFilename)
+
+    # Test if there is a MasterDark image for this binnng level.
+    if os.path.isfile(masterDarkFilename):
+        # Read in the file if it exists
         print('\nLoading file into masterDark list')
-        print(filename)
-        masterDarks.update({thisBin:
-                            Dark(filename)})
-    else:
-        print('\nProcessing darks with ({0:g}x{0:g}) binning'.format(thisBin))
+        print(masterDarkFilename)
+        masterDark = ai.MasterDark.read(masterDarkFilename)
+        masterDark = masterDark.astype(np.float32)
+        masterDarkDict.update({thisBin: masterDark})
 
-        # Select the bias images with the correct binning level
-        darkImgFiles = fileIndex['Filename'][darkBool & (binType == thisBin)]
+        # If a masterDark was found, then continue out of the loop
+        continue
 
-        print('\nProceeding to remove overscans and bias from the dark images')
+    # Locate the raw dark images with this binning
+    thisDarkBinBool = np.logical_and(darkBool, (binning == thisBin))
+    thisDarkBinInds = np.where(thisDarkBinBool)
+    darkImgFiles    = fileIndex['Filename'][thisDarkBinInds]
 
-        # Select the correct polynomial order
-        polyInd            = (overscanPolyDegrees['Binning'] == thisBin)
-        overscanPolyDegree = int((overscanPolyDegrees[polyInd])['Polynomial'])
+    # Otherwise continue to read in and process a masterDark image
+    print('\nProcessing {0} darks with ({1:g}x{1:g}) binning'.format(
+        darkImgFiles.size, thisBin))
 
-        # Loop through each of the files and add them to the biasImgList list
-        darkImgList  = []
-        for file in darkImgFiles:
-            thisDark = Dark(file)
-            thisDark.overscan_correction(overscanPos, sciencePos,
-                                         overscanPolyDegree)
-            thisDark.arr = thisDark.arr - masterBiases[thisBin].arr
-            darkImgList.append(thisDark)
+    # Loop through each of the files and add them to the darkImgList list
+    darkImgList  = []
+    for filename in darkImgFiles:
+        # Read the raw dark image from disk
+        rawDark = ai.RawDark.read(filename)
 
-        # Generate a Dark(Image) object to store the final dark current map
-        darkCurrent = Dark()
-        # Perform the Dark.dark_current() method to compute the dark current map
-        darkCurrent.arr = Dark.dark_current(darkImgList)
-        darkCurrent.header = darkImgList[0].header
-        masterDarks.update({thisBin: darkCurrent})
-        print('\nThe mean dark current is {0:g} counts/second'.
-          format(np.mean(masterDarks[thisBin].arr)))
+        # Apply the basic data processing
+        reducedDark = rawDark.process_image(
+            bias=masterBiasDict[thisBin]
+        )
 
-        # Write darkCurrent Image object to disk
-        filename = os.path.join(calibrationDir, 'MasterDark{0:g}.fits'.format(thisBin))
-        fits.writeto(filename,
-                     masterDarks[thisBin].arr.astype(np.float32),
-                     darkImgList[0].header,
-                     clobber = True)
+        # Divide the reduced dark by its own exposure time
+        # (just to make sure that all darks have the same properties)
+        reducedDark = reducedDark.divide_by_expTime()
 
-        # Do a quick cleanup to make sure that memory survives
-        del darkImgList
-        del darkCurrent
+        # Append the reduced dark to the list of dark images
+        darkImgList.append(reducedDark)
+
+    # Construct an ImageStack out of the dark image list
+    darkStack = ai.ImageStack(darkImgList)
+
+    # Compute the master dark
+    masterDark = darkStack.combine_images()
+
+    # Convert to a 32 bit float
+    masterDark = masterDark.astype(np.float32)
+
+    # Store the master dark in the dictionary of colibration data
+    masterDarkDict.update({thisBin: masterDark})
+
+    # Write masterDark object to disk
+    masterDark.write(masterDarkFilename, dtype=np.float32, clobber=True)
+
+    print('\nThe mean dark level is {0:g} counts\n'.
+      format(masterDark.data.mean()))
+
+    # Do a quick cleanup to make sure that memory survives
+    del darkStack
+    del masterDark
 
 #==============================================================================
 # ***************************** FLATS *****************************************
 # Setup the paths to the flat images and compute the flat map
 #==============================================================================
-# TODO loop through each waveband (exterior loop)
-# TODO compute average lights on flat
-# TODO compute average lights off flat
-# TODO define magic_method "sub" for image class
-# TODO compute masterFlat = lightsOn - lightsOff
-
 # Find the number of unique wavebands used in flats
-uniqBands = np.unique(waveBand[flatBool])
+uniqBands = np.unique(waveBand)
 
-# Create an empty dictionary to store the masterFlats,
-# keyed to each band/binning pair
-# TODO change ALL "master" lists to "master" dictionaries
-# TODO make sure all image lists get deleted from memory
-masterFlats = {}
+# Create an empty dictionary to store the masterFlatDict,
+# keyed to each band/polAng/binning combination
+masterFlatDict = {}
 
 #Loop through each waveband
 for thisBand in uniqBands:
     # Compute the unique values for the polaroid rotation angle
-    uniqPolAngs = np.unique(polAng[flatBool &
-                            (waveBand == thisBand)])
+    thisFlatWaveBool = np.logical_and(flatBool, (waveBand == thisBand))
+    thisFlatWaveInds = np.where(thisFlatWaveBool)
+    uniqPolAngs      = np.unique(polAng[thisFlatWaveInds])
+
     for thisAng in uniqPolAngs:
         # Compute the unique values for the binning level
-        uniqBins = np.unique(binType[flatBool &
-                             (waveBand == thisBand) &
-                             (polAng == thisAng)])
-        # TODO replace binNumber syntax with dictionary syntax
+        thisFlatAngBool = np.logical_and(thisFlatWaveBool, (polAng == thisAng))
+        thisFlatAngInds = np.where(thisFlatAngBool)
+        uniqBins        = np.unique(binning[thisFlatAngInds]).astype(int)
+
         for thisBin in uniqBins:
-            # Construct the keyname and filename for this image
-            keyname  = '{0:s}_{1:g}_{2:g}'.format(thisBand, thisAng, thisBin)
-            filename = os.path.join(calibrationDir, 'MasterFlat{0:s}_{1:g}_{2:g}.fits'.format(
-              thisBand, thisAng, thisBin))
+            # Construct the flatKey and filename for this image
+            flatKey            = (thisBand, thisAng, thisBin)
+            flatKeyStr         = '{0:s}_{1:g}_{2:g}'.format(*flatKey)
+            masterFlatFilename = 'MasterFlat' + flatKeyStr + '.fits'
+            masterFlatFilename = os.path.join(calibrationDir, masterFlatFilename)
 
             # Test if the file exists
-            if os.path.isfile(filename):
+            if os.path.isfile(masterFlatFilename):
                 # Read in the file if it exists
                 print('\nLoading file into masterFlat list')
-                print(filename)
-                masterFlats.update({keyname:
-                                    Flat(filename)})
+                print(masterFlatFilename)
+                masterFlat = ai.MasterFlat.read(masterFlatFilename)
+                masterFlat = masterFlat.astype(np.float32)
+                masterFlatDict.update({flatKey: masterFlat})
+
+                # If a master flat was found, then continue out of the loop...
+                continue
+
+            # Locate the raw bias images with this binning
+            thisFlatBinBool = np.logical_and(thisFlatAngBool, (binning == thisBin))
+            thisFlatBinInds = np.where(thisFlatBinBool)
+            flatImgFiles    = fileIndex['Filename'][thisFlatBinInds]
+
+            # Otherwise continue to read in and process a masterFlat image
+            # Create the file if it does not exist
+            print('\nProcessing {0} flats for'.format(flatImgFiles.size))
+            print('band    = {0:s}'.format(thisBand))
+            print('polAng  = {0:g}'.format(thisAng))
+            print('binning = ({0:g}x{0:g})'.format(thisBin))
+
+            # Loop through each of the files and add them to the biasImgList list
+            flatImgList  = []
+            for filename in flatImgFiles:
+                # Read the raw flat image from disk
+                rawFlat = ai.RawFlat.read(filename)
+
+                # Apply basic data processing
+                reducedFlat = rawFlat.process_image(
+                    bias=masterBiasDict[thisBin],
+                    dark=masterDarkDict[thisBin]
+                )
+                # Divide the flat image by its own mode
+                reducedFlat = reducedFlat/reducedFlat.mode
+
+                # Add the mode-normalized flat to the list of flat images
+                flatImgList.append(reducedFlat)
+
+            # Loop through all the flats and determine which ones have
+            # lights-on vs. lights-off
+            # Start by grabbing all the stats for each flat.
+            flatStats = [img.sigma_clipped_stats() for img in flatImgList]
+            flatStats = np.array(flatStats)
+
+            # Now compute the SNR level in each flat
+            flatSNRs = flatStats[:,1]/flatStats[:,2]
+
+            # Estimate that the images with SNR > 1.5 are lights-on images
+            thisFlatOnBool  = (flatSNRs > 1.5)
+            thisFlatOnInds  = np.where(thisFlatOnBool)
+            thisFlatOffBool = np.logical_not(thisFlatOnBool)
+            thisFlatOffInds = np.where(thisFlatOffBool)
+
+            # Convert the list of images into an array for indexing
+            flatImgList = np.array(flatImgList)
+
+            # Grab the lights-on flats and compute the average image
+            if np.sum(thisFlatOnBool.astype(int)) > 0:
+                # Grab the lights-on images
+                flatOnImgList = flatImgList[thisFlatOnInds]
+
+                # Construct an ImageStack out of the dark image list
+                flatStack = ai.ImageStack(flatOnImgList)
+
+                # Compute the master flat
+                masterOnFlat = flatStack.combine_images()
+
+                # Divide the master flat by its own mode (re-normalize)
+                masterOnFlat = masterOnFlat/masterOnFlat.mode
+
+                # Convert to a 32 bit float
+                masterOnFlat = masterOnFlat.astype(np.float32)
             else:
-                # Create the file if it does not exist
-                print('\nProcessing flats for')
-                print('band    = {0:s}'.format(thisBand))
-                print('polAng  = {0:g}'.format(thisAng))
-                print('binning = ({0:g}x{0:g})'.format(thisBin))
+                raise RuntimeError('There are no flat images. This is a major problem!')
 
-                flatOnImgFiles = fileIndex['Filename'][flatBool &
-                                                       (polAng == thisAng) &
-                                                       (binType == thisBin) &
-                                                       (lights == 'lights on')]
+            # Grab the lights-off flats and compute the average image
+            if np.sum(thisFlatOffBool.astype(int)) > 0:
+                # Grab the lights-on images
+                flatOffImgList = flatImgList[thisFlatOnInds]
 
-                flatOffImgFiles = fileIndex['Filename'][flatBool &
-                                                        (polAng == thisAng) &
-                                                        (binType == thisBin) &
-                                                        (lights == 'lights off')]
+                # Construct an ImageStack out of the dark image list
+                flatStack = ai.ImageStack(flatOffImgList)
 
-                print('\nProceeding to remove overscans and bias from the flat images')
+                # Compute the master flat
+                masterOffFlat = flatStack.combine_images()
 
-                # Select the correct polynomial order for this binning
-                polyInd            = (overscanPolyDegrees['Binning'] == thisBin)
-                overscanPolyDegree = int((overscanPolyDegrees[polyInd])['Polynomial'])
+                # Divide the master flat by its own mode (re-normalize)
+                masterOffFlat = masterOffFlat/masterOffFlat.mode
 
-                # Loop through each of the files and add them to the biasImgList list
-                flatOnImgList  = []
-                for file in flatOnImgFiles:
-                    thisFlat = Flat(file)
-                    thisFlat.overscan_correction(overscanPos, sciencePos,
-                                                 overscanPolyDegree)
-                    # TODO define a subtraction method for image array
-                    # test for if it's another image or a similarly sized array
-                    thisFlat.arr = thisFlat.arr - masterBiases[thisBin].arr
-                    flatOnImgList.append(thisFlat)
-
+                # Convert to a 32 bit float
+                masterOffFlat = masterOffFlat.astype(np.float32)
+            else:
+                # Not having any lights-off flats probabbly isn't such a big deal
                 flatOffImgList = []
-                for file in flatOffImgFiles:
-                    thisFlat = Flat(file)
-                    thisFlat.overscan_correction(overscanPos, sciencePos,
-                                                 overscanPolyDegree)
-                    thisFlat.arr = thisFlat.arr - masterBiases[thisBin].arr
-                    flatOffImgList.append(thisFlat)
+                masterOffFlat = 0
 
-                # Compute AVERAGE flat 'lights on' image
-                flatImg = Flat.master_flat(flatOnImgList)
+            # Compute the difference between the lights-on and lights-off flats
+            masterFlat = masterOnFlat - masterOffFlat
 
-                # Compute an off flat to subtract
-                if len(flatOffImgList) > 0:
-                    flatOffImg = Flat.master_flat(flatOffImgList)
-                    flatImg   -= flatOffImg
+            # Make sure the header is fully up to date
+            masterFlat._properties_to_header()
 
-                # Normalize the flat field by the mode
-                # Compute the positions of the non-overscan region
-                sciencePos1 = sciencePos/thisBin
-                flatModeImg = flatImg[sciencePos1[0][1]:sciencePos1[1][1], \
-                                      sciencePos1[0][0]:sciencePos1[1][0]]
+            # Catch any instances of where the flat is zero and set to one.
+            zeroPix = (masterFlat.data == 0)
+            if np.sum(zeroPix) > 0:
+                # Copy the data array
+                fixedArray = masterFlat.data.copy()
 
-                # Compute the number of bins that will be needed to find mode
-                flatBins = np.ceil(0.1*(np.max(flatModeImg) -
-                                         np.min(flatModeImg)))
+                # Find the pixels where there are zeros
+                zeroInds   = np.where(zeroPix)
+                fixedArray[zeroInds] = 1
 
-                # Generate a histogram of the flat field
-                hist, flatBins = np.histogram(flatModeImg.flatten(), flatBins)
+                # Replace the master flat data array
+                masterFlat.data = fixedArray
 
-                # Locate the histogram maximum
-                maxInd = np.where(hist == np.max(hist))
-                if len(maxInd) == 1:
-                    maxInd = maxInd[0]
-                else:
-                    print('The mode is ambiguous')
-                    pdb.set_trace()
+            # Store the master dark in the dictionary of colibration data
+            masterFlatDict.update({flatKey: masterFlat})
 
-                # Estimate flatMode from histogram maximum
-                flatMode = np.mean(flatBins[maxInd:maxInd+2])
+            # Write masterFlat object to disk
+            masterFlat.write(masterFlatFilename, dtype=np.float32, clobber=True)
 
-                # Grab the data within 100 counts of the estimated mode
-                # Use kernel density estimator to find a more accurate mode
-                print('Evaluating gaussian kernel density estimator')
-                flatModeData = flatModeImg[np.where(
-                  np.abs(flatModeImg - flatMode) < 100)]
-                kernel = stats.gaussian_kde(flatModeData)
-
-                # Establish bins for evaluating the resultant
-                xmin     = np.floor(flatMode - 30)
-                xmax     = np.ceil(flatMode + 10)
-                flatBins = np.mgrid[xmin:xmax:0.5]
-                density  = kernel.evaluate(flatBins)
-                flatMode = flatBins[np.where(density == density.max())]
-
-                # Normalize flatImg
-                flatImg /= flatMode
-
-                # TODO replace zeros with average of surrounding non-zero values
-                # Replace zero values in overscan regions
-                # to prevent division problems later.
-                zeroInds = np.where(flatImg == 0)
-                flatImg[zeroInds] = 1
-
-                masterFlats.update({keyname:flatImg})
-
-                # Write normalized flat to disk
-                fits.writeto(filename,
-                             (masterFlats[keyname]).astype(np.float32),
-                             flatOnImgList[0].header,
-                             clobber = True)
-
-                # Do a quick cleanup to make sure that memory survives
-                del flatOnImgList
-                del flatOffImgList
+            # Do a quick cleanup to make sure that memory survives
+            del flatOnImgList
+            del flatOffImgList
+            del flatStack
 
 # Let the user know everything completed
 print('\n..........')

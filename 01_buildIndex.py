@@ -4,7 +4,6 @@
 import os
 import sys
 import time
-import pdb
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy.table import Table
@@ -12,10 +11,12 @@ from astropy.table import Column
 from astropy.io import fits, ascii
 from scipy import stats
 
-# Add the AstroImage class
-sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
-from AstroImage import AstroImage, Bias, Dark, Flat
+# Import AstroImage
+import astroimage as ai
 
+# Add the header handler to the BaseImage class
+from PRISM_header_handler import PRISM_header_handler
+ai.BaseImage.set_header_handler(PRISM_header_handler)
 
 ################################################################################
 # Define a recursive file search which takes a parent directory and returns all
@@ -56,7 +57,7 @@ delim = os.path.sep
 # and some of the subdirectory structure to find the actual .FITS images
 #==============================================================================
 # This is the location of the raw data for the observing run
-rawDir   = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\raw_data'
+rawDir   = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\raw_data\\201612\\'
 fileList = recursive_file_search(rawDir, exten='.fits')
 
 #Sort the fileList
@@ -66,18 +67,17 @@ sortInds = np.argsort(np.array(fileNums, dtype = np.int64))
 fileList = [fileList[ind] for ind in sortInds]
 
 # Define the path to the parent directory for all pyBDP products
-pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data'
+pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data\\201612\\'
+
+# Setup new directory for reduced data if it does not already exist
+if (not os.path.isdir(pyBDP_data)):
+    os.mkdir(pyBDP_data, 0o755)
 
 # Define the directory into which the average calibration images will be placed
 calibrationDir = os.path.join(pyBDP_data, 'master_calibration_images')
 
 # Reduced directory (for saving the final images)
 reducedDir = os.path.join(pyBDP_data, 'pyBDP_reduced_images')
-
-# These are the overscan regions for all PRISM frames at 1x1 binning
-#                       ((x1,y1), (x2, y2))
-overscanPos = np.array([[2110, 8],[2177, 2059]], dtype = np.int32)
-sciencePos  = np.array([[70,  32],[2070, 2032]], dtype = np.int32)
 
 #==============================================================================
 # ***************************** INDEX *****************************************
