@@ -46,16 +46,15 @@ indexFile = os.path.join(pyBDP_data, 'rawFileIndex.csv')
 fileIndex = Table.read(indexFile, format='csv')
 
 # Locate where the bias, dark, flat, and science images are in the index
-biasBool = (fileIndex['Data'] == 'BIAS')
-darkBool = (fileIndex['Data'] == 'DARK')
-flatBool = (fileIndex['Data'] == 'FLAT')
-sciBool  = (fileIndex['Data'] == 'OBJECT')
+biasBool = (fileIndex['OBSTYPE'] == 'BIAS')
+darkBool = (fileIndex['OBSTYPE'] == 'DARK')
+flatBool = (fileIndex['OBSTYPE'] == 'FLAT')
+sciBool  = (fileIndex['OBSTYPE'] == 'OBJECT')
 
 # Extract lists of the waveband, polaroid angle, binning, and lights-on/off
-waveBand = fileIndex['Waveband']
-polAng   = fileIndex['Polaroid Angle']
-binning  = fileIndex['Binning']
-lights   = fileIndex['Lights']
+waveBand = fileIndex['FILTER']
+polAng   = fileIndex['POLPOS']
+binning  = fileIndex['BINNING']
 
 #==============================================================================
 # ***************************** BIAS *****************************************

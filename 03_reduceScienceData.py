@@ -44,14 +44,13 @@ print('\nReading file index from disk')
 indexFile = os.path.join(pyBDP_data, 'rawFileIndex.csv')
 fileIndex = Table.read(indexFile, format='csv')
 
-biasBool = (fileIndex['Data'] == 'BIAS')
-darkBool = (fileIndex['Data'] == 'DARK')
-flatBool = (fileIndex['Data'] == 'FLAT')
-sciBool  = (fileIndex['Data'] == 'OBJECT')
-waveBand = fileIndex['Waveband']
-polAng   = fileIndex['Polaroid Angle']
-binning  = fileIndex['Binning']
-lights   = fileIndex['Lights']
+biasBool = (fileIndex['OBSTYPE'] == 'BIAS')
+darkBool = (fileIndex['OBSTYPE'] == 'DARK')
+flatBool = (fileIndex['OBSTYPE'] == 'FLAT')
+sciBool  = (fileIndex['OBSTYPE'] == 'OBJECT')
+waveBand = fileIndex['FILTER']
+polAng   = fileIndex['POLPOS']
+binning  = fileIndex['BINNING']
 
 #==============================================================================
 # ***************************** BIAS *****************************************
@@ -147,7 +146,7 @@ for filename in scienceImgFiles:
     rawScience = ai.RawScience.read(filename)
 
     # Extract the information on this file
-    thisBand  = rawScience.filter
+    thisBand  = rawScience.waveBand
     thisAng   = rawScience.header['POLPOS']
     thisBin   = np.int(np.unique(rawScience.binning))
 

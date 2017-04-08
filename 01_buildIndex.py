@@ -1,4 +1,6 @@
-# This script will generate an index of the raw files
+"""
+Generates an index of the raw files.
+"""
 
 #Import whatever modules will be used
 import os
@@ -6,17 +8,8 @@ import sys
 import time
 import numpy as np
 import matplotlib.pyplot as plt
-from astropy.table import Table
-from astropy.table import Column
-from astropy.io import fits, ascii
-from scipy import stats
-
-# Import AstroImage
-import astroimage as ai
-
-# Add the header handler to the BaseImage class
-from PRISM_header_handler import PRISM_header_handler
-ai.BaseImage.set_header_handler(PRISM_header_handler)
+from astropy.table import Table, Column
+from astropy.io import fits
 
 ################################################################################
 # Define a recursive file search which takes a parent directory and returns all
@@ -47,10 +40,6 @@ def recursive_file_search(parentDir, exten='', fileList=[]):
     # Return the final list to the user
     return fileList
 ################################################################################
-
-#Setup the path delimeter for this operating system
-delim = os.path.sep
-
 #==============================================================================
 # *********************** CUSTOM USER CODE ************************************
 # this is where the user specifies where the raw data is stored
@@ -58,13 +47,13 @@ delim = os.path.sep
 #==============================================================================
 # This is the location of the raw data for the observing run
 rawDir   = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\raw_data\\201612\\'
-fileList = recursive_file_search(rawDir, exten='.fits')
+fileList = np.array(recursive_file_search(rawDir, exten='.fits'))
 
 #Sort the fileList
-fileNums = [''.join((file.split(delim).pop().split('.'))[0:2]) for file in fileList]
-fileNums = [file.split('_')[0] for file in fileNums]
-sortInds = np.argsort(np.array(fileNums, dtype = np.int64))
-fileList = [fileList[ind] for ind in sortInds]
+fileNums = [''.join((os.path.basename(f).split('.'))[0:2]) for f in fileList]
+fileNums = np.array([f.split('_')[0] for f in fileNums], dtype=np.int64)
+sortInds = fileNums.argsort()
+fileList = fileList[sortInds]
 
 # Define the path to the parent directory for all pyBDP products
 pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data\\201612\\'
@@ -90,70 +79,72 @@ indexFile = os.path.join(pyBDP_data, 'rawFileIndex.csv')
 print('\nCategorizing files into "BIAS", "DARK", "FLAT", "OBJECT"\n')
 startTime = time.time()
 # Begin by initalizing some arrays to store the image classifications
-name     = []
-data     = []
-binType  = []
-polAng   = []
-waveBand = []
-lights   = []
+OBJECT   = []
+OBSTYPE  = []
+TELRA    = []
+TELDEC   = []
+FILTER   = []
+POLPOS   = []
+BINNING  = []
+NIGHT    = []
 fileCounter = 0
 percentage  = 0
 
 #Loop through each file in the fileList variable
-for file in fileList:
+for filename in fileList:
+    # Grab the OBJECT header value
+    tmpOBJECT = fits.getval(filename, 'OBJECT')
+    if len(tmpOBJECT) < 1:
+        tmpOBJECT = 'blank'
+    OBJECT.append(tmpOBJECT)
 
-    # Classify each file type and binning
-    data.append(fits.getval(file, 'OBSTYPE'))
-    tmpName = fits.getval(file, 'OBJECT')
-    if len(tmpName) < 1:
-        tmpName = 'blank'
-    name.append(tmpName)
-    polAng.append(fits.getval(file, 'POLPOS'))
-    waveBand.append(fits.getval(file, 'FILTNME3'))
-
-    # Try to grab the lights on/off status from the comments
+    # Grab the TELRA header value
     try:
-        comments = fits.getval(file, 'COMMENT')
-        for comment in comments:
-            valueWritten = False
-            if 'lights on' in comment.lower():
-                lights.append('lights on')
-                valueWritten = True
-            elif 'lights off' in comment.lower():
-                lights.append('lights off')
-                valueWritten = True
+        TELRA.append(fits.getval(filename, 'TELRA'))
+    except:
+        TELRA.append(0)
 
-        # If no comments on the lights were found, write 'N/A'
-        if not valueWritten:
-            lights.append('N/A')
+    try:
+        TELDEC.append(fits.getval(filename, 'TELDEC'))
+    except:
+        TELDEC.append(0)
 
-    # If there are no comments, then the lights are not relevant
-    except KeyError:
-        lights.append('N/A')
+    # Grab the OBSTYPE header value
+    OBSTYPE.append(fits.getval(filename, 'OBSTYPE'))
 
-    binTest  = fits.getval(file, 'CRDELT*')
-    if binTest[0] == binTest[1]:
-        binType.append(int(binTest[0]))
+    # Grab the FILTNME3 header value
+    FILTER.append(fits.getval(filename, 'FILTNME3'))
+
+    # Grab the POLPOS header value
+    POLPOS.append(fits.getval(filename, 'POLPOS'))
+
+    # Grab the binning from the CRDELT values
+    tmpBINNING = fits.getval(filename, 'CRDELT*')
+    if tmpBINNING[0] == tmpBINNING[1]:
+        BINNING.append(int(tmpBINNING[0]))
+    else:
+        raise ValueError('Binning is illogical')
+
+    # Grab the EXPTIME value from the
+
+    # Assign a NIGHT value for this image
+    NIGHT.append(''.join((os.path.basename(filename).split('.'))[0]))
 
     # Count the files completed and print update progress message
     fileCounter += 1
     percentage1  = np.floor(fileCounter/len(fileList)*100)
-#    if (percentage1 % 5) == 0 and percentage1 != percentage:
     if percentage1 != percentage:
         print('completed {0:3g}%'.format(percentage1), end="\r")
     percentage = percentage1
 
-    if len(lights) != fileCounter:
-        pdb.set_trace()
-
 endTime = time.time()
 numFiles = len(fileList)
-print('\nFile processing completed in {0:g} seconds'.format(endTime -startTime))
+print('\nFile processing completed in {0:g} seconds'.format(endTime - startTime))
 
 # Query the user about the targets of each group...
 # Write the file index to disk
-fileIndex = Table([fileList, name, data, waveBand, polAng, binType, lights],
-                  names = ['Filename', 'Name', 'Data', 'Waveband', 'Polaroid Angle', 'Binning', 'Lights'])
+fileIndex = Table([fileList,   NIGHT,    OBJECT,   TELRA,   TELDEC,   OBSTYPE,   FILTER,   POLPOS,   BINNING],
+          names = ['FILENAME', 'NIGHT', 'OBJECT', 'TELRA', 'TELDEC', 'OBSTYPE', 'FILTER', 'POLPOS', 'BINNING'])
 
 # Write file to disk
-fileIndex.write(indexFile, format='csv')
+fileIndex.write(indexFile, format='ascii.csv', overwrite=True)
